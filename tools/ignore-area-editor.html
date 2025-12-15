@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Firescrew - IgnoreAreasClasses 区域编辑器</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            color: #4ec9b0;
+            margin-bottom: 20px;
+            font-size: 24px;
+        }
+
+        .controls {
+            background: #252526;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .control-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #9cdcfe;
+            font-size: 14px;
+        }
+
+        input[type="text"],
+        input[type="file"],
+        select {
+            width: 100%;
+            padding: 8px;
+            background: #3c3c3c;
+            border: 1px solid #555;
+            border-radius: 4px;
+            color: #d4d4d4;
+            font-size: 14px;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            padding: 10px 20px;
+            background: #0e639c;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.3s;
+        }
+
+        button:hover {
+            background: #1177bb;
+        }
+
+        button.secondary {
+            background: #3c3c3c;
+        }
+
+        button.secondary:hover {
+            background: #505050;
+        }
+
+        button.danger {
+            background: #d13438;
+        }
+
+        button.danger:hover {
+            background: #e13438;
+        }
+
+        .canvas-container {
+            background: #252526;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            overflow: auto;
+        }
+
+        canvas {
+            border: 2px solid #555;
+            cursor: crosshair;
+            display: block;
+            max-width: 100%;
+        }
+
+        .output {
+            background: #252526;
+            padding: 20px;
+            border-radius: 8px;
+        }
+
+        pre {
+            background: #1e1e1e;
+            padding: 15px;
+            border-radius: 4px;
+            border: 1px solid #555;
+            overflow-x: auto;
+            font-size: 13px;
+            color: #ce9178;
+        }
+
+        .class-selector {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .class-tag {
+            padding: 6px 12px;
+            background: #3c3c3c;
+            border: 2px solid #555;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 13px;
+        }
+
+        .class-tag.selected {
+            background: #0e639c;
+            border-color: #1177bb;
+        }
+
+        .areas-list {
+            background: #1e1e1e;
+            padding: 15px;
+            border-radius: 4px;
+            border: 1px solid #555;
+            margin-bottom: 15px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .area-item {
+            background: #252526;
+            padding: 10px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            border-left: 3px solid #4ec9b0;
+        }
+
+        .area-item:hover {
+            background: #2d2d30;
+        }
+
+        .area-item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .area-item-classes {
+            color: #4ec9b0;
+            font-weight: bold;
+        }
+
+        .area-item-buttons {
+            display: flex;
+            gap: 5px;
+        }
+
+        .area-item button {
+            padding: 4px 8px;
+            font-size: 12px;
+        }
+
+        .info {
+            background: #264f78;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            font-size: 13px;
+        }
+
+        .custom-class-input {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .custom-class-input input {
+            flex: 1;
+        }
+
+        .drawing-mode {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .mode-button {
+            flex: 1;
+            padding: 10px;
+            background: #3c3c3c;
+            border: 2px solid #555;
+            color: #d4d4d4;
+            cursor: pointer;
+            border-radius: 4px;
+            transition: all 0.3s;
+        }
+
+        .mode-button.active {
+            background: #0e639c;
+            border-color: #1177bb;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎯 Firescrew - IgnoreAreasClasses 区域编辑器</h1>
+
+        <div class="controls">
+            <div class="info">
+                <strong>使用说明：</strong>
+                1. 加载视频流截图或上传图片
+                2. 选择要忽略的检测类别
+                3. 在画布上绘制矩形区域（拖拽绘制）
+                4. 点击"完成当前区域"保存
+                5. 复制生成的JSON配置到 config.json 的 ignoreAreasClasses 字段
+                <br><br>
+                <strong>坐标格式：</strong> coordinates = "top,bottom,left,right" (4个整数)
+            </div>
+
+            <div class="control-group">
+                <label>视频流地址 (从相机截图)</label>
+                <input type="text" id="streamUrl" placeholder="http://localhost:8042 或输入视频流地址">
+                <button onclick="loadFromStream()" style="margin-top: 10px;">加载视频流截图</button>
+            </div>
+
+            <div class="control-group">
+                <label>或上传本地图片</label>
+                <input type="file" id="imageFile" accept="image/*" onchange="loadFromFile()">
+            </div>
+
+            <div class="control-group" style="display: none;">
+                <label>绘制模式</label>
+                <div class="drawing-mode">
+                    <button class="mode-button active" onclick="setDrawingMode('rectangle')">
+                        矩形模式（仅支持）
+                    </button>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label>选择要忽略的检测类别 (可多选)</label>
+                <div class="class-selector" id="classSelector">
+                    <!-- 常用类别 -->
+                </div>
+                <div class="custom-class-input">
+                    <input type="text" id="customClass" placeholder="输入自定义类别">
+                    <button onclick="addCustomClass()">添加</button>
+                </div>
+            </div>
+
+            <div class="button-group">
+                <button onclick="finishCurrentArea()">完成当前区域</button>
+                <button class="secondary" onclick="clearCurrentDrawing()">清除当前绘制</button>
+                <button class="danger" onclick="clearAllAreas()">清除所有区域</button>
+            </div>
+        </div>
+
+        <div class="canvas-container">
+            <canvas id="canvas"></canvas>
+        </div>
+
+        <div class="output">
+            <h2 style="margin-bottom: 15px; color: #4ec9b0;">已绘制的区域</h2>
+            <div class="areas-list" id="areasList"></div>
+
+            <h2 style="margin-bottom: 15px; color: #4ec9b0;">生成的配置</h2>
+            <button onclick="copyToClipboard()" style="margin-bottom: 10px;">📋 复制到剪贴板</button>
+            <pre id="output">[]</pre>
+        </div>
+    </div>
+
+    <script>
+        // 常用的 COCO 类别
+        const commonClasses = [
+            'person', 'car', 'truck', 'bus', 'motorcycle', 'bicycle',
+            'dog', 'cat', 'bird', 'chair', 'bottle', 'cup'
+        ];
+
+        let canvas, ctx;
+        let imageLoaded = false;
+        let currentImage = null;
+        let areas = [];
+        let currentPoints = [];
+        let selectedClasses = new Set();
+        let isDrawing = false;
+        let drawingMode = 'rectangle'; // 'rectangle' or 'polygon'
+        let startPoint = null;
+
+        // 初始化
+        window.onload = function() {
+            canvas = document.getElementById('canvas');
+            ctx = canvas.getContext('2d');
+
+            // 初始化类别选择器
+            initClassSelector();
+
+            // 添加画布事件监听
+            canvas.addEventListener('mousedown', handleMouseDown);
+            canvas.addEventListener('mousemove', handleMouseMove);
+            canvas.addEventListener('mouseup', handleMouseUp);
+            canvas.addEventListener('dblclick', handleDoubleClick);
+        };
+
+        function initClassSelector() {
+            const selector = document.getElementById('classSelector');
+            selector.innerHTML = '';
+
+            commonClasses.forEach(cls => {
+                const tag = document.createElement('div');
+                tag.className = 'class-tag';
+                tag.textContent = cls;
+                tag.onclick = () => toggleClass(cls, tag);
+                selector.appendChild(tag);
+            });
+        }
+
+        function toggleClass(className, element) {
+            if (selectedClasses.has(className)) {
+                selectedClasses.delete(className);
+                element.classList.remove('selected');
+            } else {
+                selectedClasses.add(className);
+                element.classList.add('selected');
+            }
+        }
+
+        function addCustomClass() {
+            const input = document.getElementById('customClass');
+            const className = input.value.trim();
+
+            if (!className) return;
+
+            if (!commonClasses.includes(className)) {
+                commonClasses.push(className);
+                initClassSelector();
+            }
+
+            // 自动选中
+            selectedClasses.add(className);
+            const tags = document.querySelectorAll('.class-tag');
+            tags.forEach(tag => {
+                if (tag.textContent === className) {
+                    tag.classList.add('selected');
+                }
+            });
+
+            input.value = '';
+        }
+
+        function setDrawingMode(mode) {
+            drawingMode = mode;
+            const buttons = document.querySelectorAll('.mode-button');
+            buttons.forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+
+            clearCurrentDrawing();
+        }
+
+        function loadFromStream() {
+            const url = document.getElementById('streamUrl').value.trim();
+            if (!url) {
+                alert('请输入视频流地址');
+                return;
+            }
+
+            // 尝试加载视频流的当前帧
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = function() {
+                setupCanvas(this);
+            };
+            img.onerror = function() {
+                alert('无法加载视频流截图，请确保地址正确且服务正在运行');
+            };
+            img.src = url;
+        }
+
+        function loadFromFile() {
+            const file = document.getElementById('imageFile').files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const img = new Image();
+                img.onload = function() {
+                    setupCanvas(this);
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function setupCanvas(img) {
+            currentImage = img;
+            canvas.width = img.width;
+            canvas.height = img.height;
+            imageLoaded = true;
+            redraw();
+        }
+
+        function handleMouseDown(e) {
+            if (!imageLoaded) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const x = Math.round((e.clientX - rect.left) * (canvas.width / rect.width));
+            const y = Math.round((e.clientY - rect.top) * (canvas.height / rect.height));
+
+            if (drawingMode === 'rectangle') {
+                isDrawing = true;
+                startPoint = {x, y};
+                currentPoints = [startPoint];
+            } else if (drawingMode === 'polygon') {
+                currentPoints.push({x, y});
+                redraw();
+            }
+        }
+
+        function handleMouseMove(e) {
+            if (!imageLoaded) return;
+
+            if (drawingMode === 'rectangle' && isDrawing && startPoint) {
+                const rect = canvas.getBoundingClientRect();
+                const x = Math.round((e.clientX - rect.left) * (canvas.width / rect.width));
+                const y = Math.round((e.clientY - rect.top) * (canvas.height / rect.height));
+
+                currentPoints = [
+                    startPoint,
+                    {x: x, y: startPoint.y},
+                    {x: x, y: y},
+                    {x: startPoint.x, y: y}
+                ];
+
+                redraw();
+            } else if (drawingMode === 'polygon' && currentPoints.length > 0) {
+                // 显示预览线
+                const rect = canvas.getBoundingClientRect();
+                const x = Math.round((e.clientX - rect.left) * (canvas.width / rect.width));
+                const y = Math.round((e.clientY - rect.top) * (canvas.height / rect.height));
+
+                redraw();
+
+                // 绘制预览线
+                ctx.strokeStyle = 'rgba(255, 255, 0, 0.5)';
+                ctx.lineWidth = 2;
+                ctx.setLineDash([5, 5]);
+                ctx.beginPath();
+                ctx.moveTo(currentPoints[currentPoints.length - 1].x, currentPoints[currentPoints.length - 1].y);
+                ctx.lineTo(x, y);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+        }
+
+        function handleMouseUp(e) {
+            if (drawingMode === 'rectangle' && isDrawing) {
+                isDrawing = false;
+                if (currentPoints.length === 4) {
+                    // 自动完成矩形
+                    finishCurrentArea();
+                }
+            }
+        }
+
+        function handleDoubleClick(e) {
+            if (drawingMode === 'polygon' && currentPoints.length >= 3) {
+                finishCurrentArea();
+            }
+        }
+
+        function redraw() {
+            if (!currentImage) return;
+
+            // 清空画布
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // 绘制图片
+            ctx.drawImage(currentImage, 0, 0);
+
+            // 绘制已保存的区域
+            areas.forEach((area, index) => {
+                drawPolygon(area.points, `hsl(${index * 137.5}, 70%, 50%)`, true);
+            });
+
+            // 绘制当前正在绘制的区域
+            if (currentPoints.length > 0) {
+                drawPolygon(currentPoints, 'rgba(255, 255, 0, 0.7)', false);
+            }
+        }
+
+        function drawPolygon(points, color, filled) {
+            if (points.length === 0) return;
+
+            ctx.strokeStyle = color;
+            ctx.fillStyle = color.replace(')', ', 0.2)').replace('rgb', 'rgba').replace('hsl', 'hsla');
+            ctx.lineWidth = 2;
+
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, points[0].y);
+
+            for (let i = 1; i < points.length; i++) {
+                ctx.lineTo(points[i].x, points[i].y);
+            }
+
+            if (filled) {
+                ctx.closePath();
+                ctx.fill();
+            }
+
+            ctx.stroke();
+
+            // 绘制顶点
+            points.forEach(point => {
+                ctx.fillStyle = color;
+                ctx.beginPath();
+                ctx.arc(point.x, point.y, 4, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        }
+
+        function finishCurrentArea() {
+            if (currentPoints.length < 2) {
+                alert('至少需要2个点才能形成区域');
+                return;
+            }
+
+            if (selectedClasses.size === 0) {
+                alert('请至少选择一个要忽略的检测类别');
+                return;
+            }
+
+            // 计算边界框
+            const xs = currentPoints.map(p => p.x);
+            const ys = currentPoints.map(p => p.y);
+            const left = Math.min(...xs);
+            const right = Math.max(...xs);
+            const top = Math.min(...ys);
+            const bottom = Math.max(...ys);
+
+            // 生成 coordinates 字符串：格式为 "top,bottom,left,right"
+            const coordinates = `${top},${bottom},${left},${right}`;
+
+            // 保存区域（保存完整的矩形用于显示）
+            areas.push({
+                class: Array.from(selectedClasses),
+                coordinates: coordinates,
+                top: top,
+                bottom: bottom,
+                left: left,
+                right: right,
+                points: [
+                    {x: left, y: top},
+                    {x: right, y: top},
+                    {x: right, y: bottom},
+                    {x: left, y: bottom}
+                ]
+            });
+
+            // 清除当前绘制
+            currentPoints = [];
+            startPoint = null;
+            isDrawing = false;
+
+            // 重绘并更新输出
+            redraw();
+            updateOutput();
+        }
+
+        function clearCurrentDrawing() {
+            currentPoints = [];
+            startPoint = null;
+            isDrawing = false;
+            redraw();
+        }
+
+        function clearAllAreas() {
+            if (areas.length === 0) return;
+
+            if (confirm('确定要清除所有已绘制的区域吗？')) {
+                areas = [];
+                redraw();
+                updateOutput();
+            }
+        }
+
+        function deleteArea(index) {
+            areas.splice(index, 1);
+            redraw();
+            updateOutput();
+        }
+
+        function updateOutput() {
+            // 生成JSON输出 - 只需要 class 和 coordinates 字段
+            const output = areas.map(area => ({
+                class: area.class,
+                coordinates: area.coordinates
+            }));
+
+            document.getElementById('output').textContent = JSON.stringify(output, null, 4);
+
+            // 更新区域列表
+            updateAreasList();
+        }
+
+        function updateAreasList() {
+            const list = document.getElementById('areasList');
+            list.innerHTML = '';
+
+            if (areas.length === 0) {
+                list.innerHTML = '<div style="color: #858585; text-align: center;">暂无绘制区域</div>';
+                return;
+            }
+
+            areas.forEach((area, index) => {
+                const item = document.createElement('div');
+                item.className = 'area-item';
+                item.innerHTML = `
+                    <div class="area-item-header">
+                        <span class="area-item-classes">区域 ${index + 1}: ${area.class.join(', ')}</span>
+                        <div class="area-item-buttons">
+                            <button class="danger" onclick="deleteArea(${index})">删除</button>
+                        </div>
+                    </div>
+                    <div style="font-size: 12px; color: #858585; margin-top: 5px;">
+                        坐标: ${area.coordinates.substring(0, 50)}${area.coordinates.length > 50 ? '...' : ''}
+                    </div>
+                `;
+                list.appendChild(item);
+            });
+        }
+
+        function copyToClipboard() {
+            const output = document.getElementById('output').textContent;
+            navigator.clipboard.writeText(output).then(() => {
+                alert('已复制到剪贴板！');
+            }).catch(err => {
+                console.error('复制失败:', err);
+                alert('复制失败，请手动复制');
+            });
+        }
+    </script>
+</body>
+</html>

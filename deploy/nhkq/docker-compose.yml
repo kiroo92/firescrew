@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  firescrew:
+    image: 192.168.102.29:89/8fforg/firescrew:latest
+    container_name: firescrew-nhkq
+    stdin_open: true
+    tty: true
+    volumes:
+      - /home/smart/data/seaweedfs/smartdbase_prod_data/mineral/motion:/media
+      - ./config-camera2.json:/config.json
+    ports:
+      - "8043:8042"
+    command: ["/config.json"]
+    restart: unless-stopped
+    environment:
+      TZ: "Asia/Shanghai"
+    # 如果需要 Web UI，取消注释下面的端口映射
+    # ports:
+    #   - "8080:8080"

@@ -2,28 +2,19 @@ version: '3.8'
 
 services:
   firescrew:
-    image: kklt/firescrew:latest     
+    image: 192.168.102.29:89/8fforg/firescrew:latest
     container_name: firescrew
     stdin_open: true
     tty: true
     volumes:
-      - ./media:/media
+      - /home/smart/data/seaweedfs/smartdbase_prod_data/mineral/motion:/media
       - ./config-camera2.json:/config.json
     ports:
       - "8042:8042"
     command: ["/config.json"]
     restart: unless-stopped
+    environment:
+      TZ: "Asia/Shanghai"
     # 如果需要 Web UI，取消注释下面的端口映射
     # ports:
     #   - "8080:8080"
-
-  # 可选：Web UI 服务（如果需要分离运行）
-  firescrew-web:
-    image: kklt/firescrew:latest     
-    container_name: firescrew-web
-    ports:
-      - "8080:8080"
-    volumes:
-      - ./media:/media
-    command: ["-s", "/media", ":8080"]
-    restart: unless-stopped

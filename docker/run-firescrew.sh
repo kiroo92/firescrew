@@ -24,5 +24,10 @@ if [ ! -f "$BINARY_PATH" ]; then
   exit 1
 fi
 
+#更新
+# echo "update"
+# $BINARY_PATH update
 
+
+chmod +x $BINARY_PATH
 $BINARY_PATH "$@"

@@ -9,3 +9,5 @@ demoStream/demoConfig.json
 demoStream/rtspServer/rtspServer
 demoStream/sample.mp4
 media/
+.kiro
+.vscode/

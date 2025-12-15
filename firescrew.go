@@ -90,6 +90,12 @@ type Config struct {
 	IgnoreAreasClasses            []IgnoreAreaClass `json:"ignoreAreasClasses"`
 	EnableOutputStream            bool              `json:"enableOutputStream"`
 	OutputStreamAddr              string            `json:"outputStreamAddr"`
+	DirectionDetection            struct {
+		Enabled           bool    `json:"enabled"`
+		EntryLine         string  `json:"entryLine"`         // Format: "x1,y1,x2,y2"
+		ExitLine          string  `json:"exitLine"`          // Format: "x1,y1,x2,y2"
+		MinMovementPixels float64 `json:"minMovementPixels"` // Minimum movement to determine direction
+	} `json:"directionDetection"`
 	Motion                        struct {
 		OnnxModel                 string   `json:"onnxModel"`
 		OnnxEnableCoreMl          bool     `json:"onnxEnableCoreMl"`
@@ -180,12 +186,19 @@ type ControlCommand struct {
 }
 
 type TrackedObject struct {
-	BBox       image.Rectangle
-	Center     image.Point
-	Area       float64
-	LastMoved  time.Time
-	Class      string
-	Confidence float32
+	ID             string          // Unique identifier for tracking
+	BBox           image.Rectangle
+	Center         image.Point
+	Area           float64
+	LastMoved      time.Time
+	Class          string
+	Confidence     float32
+	MaxConfidence  float32         // Highest confidence observed during tracking
+	FirstSeen      time.Time
+	InitialCenter  image.Point
+	Direction      string          // "entering", "exiting", "unknown"
+	MovementVector image.Point     // X and Y displacement from initial position
+	FrameCount     int             // Number of frames this object has been tracked
 }
 
 type VideoMetadata struct {
@@ -237,6 +250,7 @@ type DBMotionSnapshot struct {
 	LastMoved      time.Time `db:"last_moved"`
 	ObjectClass    string    `db:"object_class"`
 	Confidence     float32   `db:"confidence"`
+	Direction      string    `db:"direction"`      // "entering", "exiting", "unknown"
 	CreatedAt      time.Time `db:"created_at"`
 }
 
@@ -475,6 +489,7 @@ func createTables() error {
 		last_moved TIMESTAMP,
 		object_class VARCHAR(50),
 		confidence REAL,
+		direction VARCHAR(20) DEFAULT 'unknown',
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	);`
 
@@ -535,11 +550,52 @@ func saveEventToDB(eventData VideoMetadata) error {
 		return nil // 如果没有数据库连接，则跳过
 	}
 
+	// 去重：按物体ID分组，每个唯一物体只保存一条记录
+	// 使用最后一次检测的数据（包含最终方向和最高置信度）
+	uniqueObjects := make(map[string]struct {
+		Object   TrackedObject
+		Snapshot string
+		Index    int
+	})
+
 	// 确保Objects和Snapshots数量匹配
-	if len(eventData.Objects) != len(eventData.Snapshots) {
-		Log("warning", fmt.Sprintf("Objects数量(%d)与Snapshots数量(%d)不匹配，使用较小的数量", 
-			len(eventData.Objects), len(eventData.Snapshots)))
+	count := len(eventData.Snapshots)
+	if len(eventData.Objects) < count {
+		count = len(eventData.Objects)
 	}
+
+	for i := 0; i < count; i++ {
+		object := eventData.Objects[i]
+		snapshot := eventData.Snapshots[i]
+
+		// 使用物体ID作为去重键，如果ID为空则使用索引
+		key := object.ID
+		if key == "" {
+			key = fmt.Sprintf("obj_%d", i)
+		}
+
+		// 保留最后一次检测的数据（通常包含最终方向）
+		// 或者如果当前置信度更高，也更新
+		if existing, exists := uniqueObjects[key]; exists {
+			// 保留置信度更高的，或者方向已确定的
+			if object.MaxConfidence > existing.Object.MaxConfidence ||
+				(object.Direction != "unknown" && existing.Object.Direction == "unknown") {
+				uniqueObjects[key] = struct {
+					Object   TrackedObject
+					Snapshot string
+					Index    int
+				}{object, snapshot, i}
+			}
+		} else {
+			uniqueObjects[key] = struct {
+				Object   TrackedObject
+				Snapshot string
+				Index    int
+			}{object, snapshot, i}
+		}
+	}
+
+	Log("info", fmt.Sprintf("去重后：从 %d 条记录合并为 %d 条唯一物体记录", count, len(uniqueObjects)))
 
 	// 先删除该事件的旧记录（如果存在）
 	deleteSQL := `DELETE FROM motion_snapshots WHERE event_id = $1`
@@ -548,27 +604,28 @@ func saveEventToDB(eventData VideoMetadata) error {
 		return fmt.Errorf("删除旧记录失败: %v", err)
 	}
 
-	// 为每个snapshot和对应的object插入一条记录
+	// 为每个唯一物体插入一条记录
 	insertSQL := `
 	INSERT INTO motion_snapshots (
-		snapshot_id, event_id, motion_start, motion_end, camera_name, 
+		snapshot_id, event_id, motion_start, motion_end, camera_name,
 		video_file, recoded_to_mp4, snapshot_file, snapshot_index,
 		bbox_min_x, bbox_min_y, bbox_max_x, bbox_max_y,
-		center_x, center_y, area, last_moved, object_class, confidence
-	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`
+		center_x, center_y, area, last_moved, object_class, confidence, direction
+	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`
 
-	// 使用较小的数量来避免索引越界
-	count := len(eventData.Snapshots)
-	if len(eventData.Objects) < count {
-		count = len(eventData.Objects)
-	}
+	insertedCount := 0
+	for objectID, data := range uniqueObjects {
+		object := data.Object
+		snapshot := data.Snapshot
 
-	for i := 0; i < count; i++ {
-		snapshot := eventData.Snapshots[i]
-		object := eventData.Objects[i]
-		
-		// 提取snapshot ID (完整的文件名或UUID)
-		snapshotID := extractSnapshotID(snapshot)
+		// 使用物体ID作为snapshot_id（确保唯一性）
+		snapshotID := fmt.Sprintf("%s_%s", eventData.ID, objectID)
+
+		// 使用MaxConfidence如果可用，否则使用当前Confidence
+		confidence := object.Confidence
+		if object.MaxConfidence > confidence {
+			confidence = object.MaxConfidence
+		}
 
 		_, err = db.Exec(insertSQL,
 			snapshotID,                 // snapshot_id
@@ -579,7 +636,7 @@ func saveEventToDB(eventData VideoMetadata) error {
 			eventData.VideoFile,        // video_file
 			eventData.RecodedToMp4,     // recoded_to_mp4
 			snapshot,                   // snapshot_file
-			i,                          // snapshot_index
+			data.Index,                 // snapshot_index
 			object.BBox.Min.X,          // bbox_min_x
 			object.BBox.Min.Y,          // bbox_min_y
 			object.BBox.Max.X,          // bbox_max_x
@@ -589,14 +646,16 @@ func saveEventToDB(eventData VideoMetadata) error {
 			object.Area,                // area
 			object.LastMoved,           // last_moved
 			object.Class,               // object_class
-			object.Confidence)          // confidence
+			confidence,                 // confidence (使用最高置信度)
+			object.Direction)           // direction (使用最终方向)
 
 		if err != nil {
-			return fmt.Errorf("插入snapshot记录失败 (index %d): %v", i, err)
+			return fmt.Errorf("插入snapshot记录失败 (objectID %s): %v", objectID, err)
 		}
+		insertedCount++
 	}
 
-	Log("info", fmt.Sprintf("事件 %s 已保存到数据库，包含 %d 个snapshot-object记录", eventData.ID, count))
+	Log("info", fmt.Sprintf("事件 %s 已保存到数据库，包含 %d 条唯一物体记录", eventData.ID, insertedCount))
 	return nil
 }
 
@@ -888,18 +947,51 @@ func processRTSPFeed(rtspURL string, msgChannel chan<- FrameMsg) {
 	}
 }
 
+// isKeyFrame 检测 MPEG-TS 数据包中是否包含关键帧标记
+// MPEG-TS 包大小为 188 字节，同步字节为 0x47
+func containsKeyFrame(data []byte) bool {
+	// 遍历所有 TS 包
+	for i := 0; i+188 <= len(data); i += 188 {
+		// 检查同步字节
+		if data[i] != 0x47 {
+			continue
+		}
+
+		// 检查 payload unit start indicator (PUSI)
+		if (data[i+1] & 0x40) != 0 {
+			// 检查 adaptation field 和 payload 存在
+			adaptationControl := (data[i+3] >> 4) & 0x03
+			if adaptationControl == 0x02 || adaptationControl == 0x03 {
+				// 有 adaptation field
+				adaptationLength := int(data[i+4])
+				if adaptationLength > 0 && i+5 < len(data) {
+					// 检查 random access indicator (关键帧标记)
+					if (data[i+5] & 0x40) != 0 {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
 func recordRTSPStream(rtspURL string, controlChannel <-chan RecordMsg, prebufferDuration time.Duration) {
 	var file *os.File
 	recording := false
 
-	cmd := exec.Command("ffmpeg", 
+	cmd := exec.Command("ffmpeg",
     "-rtsp_transport", "tcp",
     "-buffer_size", "1024000",        // 增加缓冲区大小
     "-max_delay", "500000",           // 最大延迟 0.5秒
-    "-fflags", "+genpts",             // 生成 PTS
-    "-i", rtspURL, 
-    "-c", "copy", 
-    "-f", "mpegts", 
+    "-fflags", "+genpts+discardcorrupt", // 生成 PTS 并丢弃损坏的包
+    "-avoid_negative_ts", "make_zero", // 避免负时间戳
+    "-use_wallclock_as_timestamps", "1", // 使用墙钟时间戳
+    "-i", rtspURL,
+    "-c", "copy",
+    "-copyts",                        // 复制时间戳
+    "-start_at_zero",                 // 从零开始时间戳
+    "-f", "mpegts",
     "pipe:1")
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -921,13 +1013,15 @@ func recordRTSPStream(rtspURL string, controlChannel <-chan RecordMsg, prebuffer
 	}()
 
 	type chunkInfo struct {
-		Data []byte
-		Time time.Time
+		Data       []byte
+		Time       time.Time
+		HasKeyFrame bool
 	}
 
 	bufferSize := 4096
 	prebuffer := make([]chunkInfo, 0)
 	buffer := make([]byte, bufferSize)
+	lastKeyFrameIndex := -1
 
 	for {
 		select {
@@ -938,8 +1032,19 @@ func recordRTSPStream(rtspURL string, controlChannel <-chan RecordMsg, prebuffer
 					log.Fatal(err)
 					return
 				}
-				for _, chunk := range prebuffer { // Write prebuffered data
-					_, err := file.Write(chunk.Data)
+
+				// 找到最近的关键帧位置，从关键帧开始写入
+				startIndex := 0
+				if lastKeyFrameIndex >= 0 && lastKeyFrameIndex < len(prebuffer) {
+					startIndex = lastKeyFrameIndex
+					Log("info", fmt.Sprintf("Starting recording from keyframe at index %d/%d", startIndex, len(prebuffer)))
+				} else {
+					Log("warning", "No keyframe found in prebuffer, starting from beginning")
+				}
+
+				// 从关键帧位置开始写入预缓冲数据
+				for i := startIndex; i < len(prebuffer); i++ {
+					_, err := file.Write(prebuffer[i].Data)
 					if err != nil {
 						log.Fatal(err)
 						return
@@ -965,9 +1070,25 @@ func recordRTSPStream(rtspURL string, controlChannel <-chan RecordMsg, prebuffer
 			chunk := make([]byte, n)
 			copy(chunk, buffer[:n])
 			timestamp := time.Now()
-			prebuffer = append(prebuffer, chunkInfo{Data: chunk, Time: timestamp})
-			// Remove chunks that are older than prebufferDuration
+			hasKeyFrame := containsKeyFrame(chunk)
+
+			prebuffer = append(prebuffer, chunkInfo{
+				Data:       chunk,
+				Time:       timestamp,
+				HasKeyFrame: hasKeyFrame,
+			})
+
+			// 更新最后一个关键帧的索引
+			if hasKeyFrame {
+				lastKeyFrameIndex = len(prebuffer) - 1
+			}
+
+			// 移除过期的数据块，但保留至少一个关键帧
 			for len(prebuffer) > 1 && timestamp.Sub(prebuffer[0].Time) > prebufferDuration {
+				// 如果要删除的是最后一个关键帧之前的数据，需要更新索引
+				if lastKeyFrameIndex > 0 {
+					lastKeyFrameIndex--
+				}
 				prebuffer = prebuffer[1:]
 			}
 
@@ -1404,14 +1525,19 @@ func performDetectionOnObject(originalFrame *image.RGBA, frame *image.RGBA, pred
 		}
 
 		rect := image.Rect(predict.Left, predict.Top, predict.Right, predict.Bottom)
+		center := image.Pt((predict.Left+predict.Right)/2, (predict.Top+predict.Bottom)/2)
 
 		object := TrackedObject{
-			BBox:       rect,
-			Center:     image.Pt((predict.Left+predict.Right)/2, (predict.Top+predict.Bottom)/2),
-			LastMoved:  now,
-			Area:       float64(rect.Dx() * rect.Dy()),
-			Class:      predict.ClassName,
-			Confidence: predict.Confidence,
+			BBox:          rect,
+			Center:        center,
+			LastMoved:     now,
+			Area:          float64(rect.Dx() * rect.Dy()),
+			Class:         predict.ClassName,
+			Confidence:    predict.Confidence,
+			FirstSeen:     now,
+			InitialCenter: center,
+			MovementVector: image.Pt(0, 0),
+			Direction:     "unknown",
 		}
 
 		exists := findObjectPosition(object)
@@ -1431,7 +1557,7 @@ func performDetectionOnObject(originalFrame *image.RGBA, frame *image.RGBA, pred
 				}
 			}
 
-			Log("info", fmt.Sprintf("TRIGGERED NEW OBJECT @ COORD: %d AREA: %f [%s|%f]", object.Center, object.Area, object.Class, object.Confidence))
+			Log("info", fmt.Sprintf("TRIGGERED NEW OBJECT @ COORD: %d AREA: %f [%s|%f] DIRECTION: %s", object.Center, object.Area, object.Class, object.Confidence, object.Direction))
 			if !runtimeConfig.MotionTriggered {
 				// Lock mutex
 				runtimeConfig.MotionMutex.Lock()
@@ -1546,38 +1672,223 @@ func performDetectionOnObject(originalFrame *image.RGBA, frame *image.RGBA, pred
 	}
 }
 
+// calculateIoU calculates the Intersection over Union (IoU) of two bounding boxes
+// Returns a value between 0.0 (no overlap) and 1.0 (identical boxes)
+func calculateIoU(box1, box2 image.Rectangle) float64 {
+	// Calculate intersection
+	intersectMinX := max(box1.Min.X, box2.Min.X)
+	intersectMinY := max(box1.Min.Y, box2.Min.Y)
+	intersectMaxX := min(box1.Max.X, box2.Max.X)
+	intersectMaxY := min(box1.Max.Y, box2.Max.Y)
+
+	// Check if there is an intersection
+	if intersectMinX >= intersectMaxX || intersectMinY >= intersectMaxY {
+		return 0.0 // No intersection
+	}
+
+	// Calculate intersection area
+	intersectionArea := float64((intersectMaxX - intersectMinX) * (intersectMaxY - intersectMinY))
+
+	// Calculate areas of both boxes
+	area1 := float64(box1.Dx() * box1.Dy())
+	area2 := float64(box2.Dx() * box2.Dy())
+
+	// Handle edge case of zero area boxes
+	if area1 <= 0 || area2 <= 0 {
+		return 0.0
+	}
+
+	// Calculate union area
+	unionArea := area1 + area2 - intersectionArea
+
+	// Return IoU
+	if unionArea <= 0 {
+		return 0.0
+	}
+
+	return intersectionArea / unionArea
+}
+
 // Function that goes over lastPositions and checks if any of them are within of a threshold of the current center
+// Uses IoU (Intersection over Union) as primary matching method, with center-distance as fallback
 func findObjectPosition(object TrackedObject) bool {
+	const iouThreshold = 0.3 // IoU threshold for matching
+
 	// Check if this object has been seen before
 	for i := 0; i < len(lastPositions); i++ {
+		// Skip if class doesn't match
+		if object.Class != lastPositions[i].Class {
+			continue
+		}
+
+		// Primary matching: IoU-based matching
+		iou := calculateIoU(object.BBox, lastPositions[i].BBox)
+		
+		// Calculate center distance for fallback matching
 		distance := math.Sqrt(float64((object.Center.X-lastPositions[i].Center.X)*(object.Center.X-lastPositions[i].Center.X) + (object.Center.Y-lastPositions[i].Center.Y)*(object.Center.Y-lastPositions[i].Center.Y)))
-		// fmt.Printf("Distance: %v\n", distance)
-		if distance < globalConfig.ObjectCenterMovementThreshold {
-			// Compare area as well to see if its +- within the threshold
-			areaDiff := math.Abs(object.Area - lastPositions[i].Area)
-			// fmt.Printf("Area diff: %v\n", areaDiff)
-			if areaDiff < globalConfig.ObjectAreaThreshold {
-				// This means a match, overwrite old object with updated one
-				// Log("warning", fmt.Sprintf("UPDATING OBJECT @ %d|%f TO %d|%f DISTANCE: %d ADIFF: %d", lastPositions[i].Center, lastPositions[i].Area, object.Center, object.Area, int(distance), int(areaDiff)))
-				lastPositions[i] = object
-				return true
+
+		// Match if IoU > threshold OR (center distance < threshold AND area difference is reasonable)
+		matched := false
+		if iou > iouThreshold {
+			// IoU-based match
+			matched = true
+			// Only log if object actually moved (distance > 5 pixels) to reduce noise
+			if distance > 5 {
+				Log("debug", fmt.Sprintf("IoU MATCH: %.3f for %s @ %v", iou, object.Class, object.Center))
 			}
+		} else if distance < globalConfig.ObjectCenterMovementThreshold {
+			// Fallback: center-distance based matching with relaxed area threshold
+			// Allow matching even if size changes significantly (for objects moving toward/away from camera)
+			areaDiff := math.Abs(object.Area - lastPositions[i].Area)
+			maxArea := math.Max(object.Area, lastPositions[i].Area)
+			areaRatio := areaDiff / maxArea
+			
+			// Match if area change is less than 50% OR area diff is within absolute threshold
+			if areaRatio < 0.5 || areaDiff < globalConfig.ObjectAreaThreshold {
+				matched = true
+				Log("debug", fmt.Sprintf("CENTER MATCH: dist=%.1f, areaDiff=%.1f (%.1f%%) for %s", distance, areaDiff, areaRatio*100, object.Class))
+			}
+		}
+
+		if matched {
+			// Check if object has been tracked for too long (max 30 seconds)
+			// This handles stationary objects that should be finalized
+			trackingDuration := time.Since(lastPositions[i].FirstSeen)
+			if trackingDuration > 30*time.Second {
+				// Object has been tracked for too long, treat as new detection
+				// This will trigger a new record for stationary objects
+				Log("info", fmt.Sprintf("STATIONARY TIMEOUT [%s] @ %v tracked for %.1fs, resetting", lastPositions[i].ID, lastPositions[i].Center, trackingDuration.Seconds()))
+				// Remove the old tracking entry
+				lastPositions = append(lastPositions[:i], lastPositions[i+1:]...)
+				// Don't return true - let it fall through to create new object
+				break
+			}
+
+			// This means a match, update the object with direction tracking
+			// Preserve the ID, initial position and first seen time
+			object.ID = lastPositions[i].ID
+			object.FirstSeen = lastPositions[i].FirstSeen
+			object.InitialCenter = lastPositions[i].InitialCenter
+			object.FrameCount = lastPositions[i].FrameCount + 1
+
+			// Track maximum confidence
+			if object.Confidence > lastPositions[i].MaxConfidence {
+				object.MaxConfidence = object.Confidence
+			} else {
+				object.MaxConfidence = lastPositions[i].MaxConfidence
+			}
+
+			// Calculate movement vector from initial position
+			object.MovementVector = image.Pt(
+				object.Center.X - object.InitialCenter.X,
+				object.Center.Y - object.InitialCenter.Y,
+			)
+
+			// Determine direction if enabled
+			if globalConfig.DirectionDetection.Enabled {
+				object.Direction = determineDirection(object)
+			}
+
+			// Only log every 100 frames to reduce noise for stationary objects
+			if object.FrameCount%100 == 0 || object.FrameCount < 10 {
+				Log("debug", fmt.Sprintf("UPDATING OBJECT [%s] @ %v TO %v DIRECTION: %s FRAMES: %d", object.ID, lastPositions[i].Center, object.Center, object.Direction, object.FrameCount))
+			}
+			lastPositions[i] = object
+			return true
 		}
 	}
 
-	// Clean up lastPositions
-	for i := 0; i < len(lastPositions); i++ {
-		// Check if last update is more than 30 seconds ago
-		if time.Since(lastPositions[i].LastMoved) > 30*time.Second {
-			// Delete this object
-			// Log("error", fmt.Sprintf("EXPIRING OBJECT @ %d|%f [%s|%f]", lastPositions[i].Center, lastPositions[i].Area, lastPositions[i].Class, lastPositions[i].Confidence))
+	// Clean up lastPositions - remove objects not updated for more than 5 seconds
+	for i := len(lastPositions) - 1; i >= 0; i-- {
+		if time.Since(lastPositions[i].LastMoved) > 5*time.Second {
+			Log("info", fmt.Sprintf("EXPIRING OBJECT [%s] @ %v [%s|%.2f] DIRECTION: %s FRAMES: %d", lastPositions[i].ID, lastPositions[i].Center, lastPositions[i].Class, lastPositions[i].MaxConfidence, lastPositions[i].Direction, lastPositions[i].FrameCount))
 			lastPositions = append(lastPositions[:i], lastPositions[i+1:]...)
 		}
 	}
 
-	// This is a new object, add it
+	// This is a new object, initialize tracking fields
+	object.ID = generateRandomString(8) // Generate unique ID for new object
+	object.FirstSeen = time.Now()
+	object.InitialCenter = object.Center
+	object.MovementVector = image.Pt(0, 0)
+	object.Direction = "unknown"
+	object.MaxConfidence = object.Confidence
+	object.FrameCount = 1
+
 	lastPositions = append(lastPositions, object)
 	return false
+}
+
+// Determine the direction of object movement
+// Uses cumulative movement vector from first detection to current position
+func determineDirection(object TrackedObject) string {
+	// Calculate total movement distance from initial position
+	totalMovement := math.Sqrt(float64(object.MovementVector.X*object.MovementVector.X + object.MovementVector.Y*object.MovementVector.Y))
+
+	// Use configured threshold for direction detection
+	minMovement := globalConfig.DirectionDetection.MinMovementPixels
+	if minMovement <= 0 {
+		minMovement = 30.0 // Default to 30 pixels if not configured
+	}
+
+	// Log movement info for debugging (only every 50 frames to reduce noise)
+	if object.FrameCount%50 == 0 {
+		Log("debug", fmt.Sprintf("DIRECTION CHECK [%s]: movement=(%.1f,%.1f) total=%.1f threshold=%.1f",
+			object.ID, float64(object.MovementVector.X), float64(object.MovementVector.Y), totalMovement, minMovement))
+	}
+
+	// If movement is too small, keep previous direction or return unknown
+	if totalMovement < minMovement {
+		// If we already have a direction, keep it
+		if object.Direction != "" && object.Direction != "unknown" {
+			return object.Direction
+		}
+		return "unknown"
+	}
+
+	// Direction detection based on dominant axis movement
+	// Positive X = moving right, Negative X = moving left
+	// Positive Y = moving down, Negative Y = moving up
+
+	absX := math.Abs(float64(object.MovementVector.X))
+	absY := math.Abs(float64(object.MovementVector.Y))
+
+	var rawDirection string
+
+	// Determine primary direction based on larger movement
+	if absX > absY {
+		// Horizontal movement is dominant
+		if object.MovementVector.X > 0 {
+			rawDirection = "right"
+		} else {
+			rawDirection = "left"
+		}
+	} else {
+		// Vertical movement is dominant
+		if object.MovementVector.Y > 0 {
+			rawDirection = "down"
+		} else {
+			rawDirection = "up"
+		}
+	}
+
+	// Map to entering/exiting based on configuration
+	// Default mapping: right/down = entering, left/up = exiting
+	// This can be customized based on camera setup
+	var result string
+	switch rawDirection {
+	case "right", "down":
+		result = "entering"
+	case "left", "up":
+		result = "exiting"
+	default:
+		result = "unknown"
+	}
+
+	Log("debug", fmt.Sprintf("DIRECTION: movement=(%.1f,%.1f) total=%.1f raw=%s result=%s",
+		float64(object.MovementVector.X), float64(object.MovementVector.Y), totalMovement, rawDirection, result))
+
+	return result
 }
 
 func streamImage(img *image.RGBA, stream *mjpeg.Stream) {
@@ -2083,6 +2394,24 @@ func endMotionEvent() {
 	// Stop Hi res recording and dump json file as well as clear struct
 	runtimeConfig.MotionVideo.MotionEnd = time.Now()
 	runtimeConfig.HiResControlChannel <- RecordMsg{Record: false}
+
+	// 更新 MotionVideo.Objects 中的方向信息，使用 lastPositions 中的最新数据
+	for i := range runtimeConfig.MotionVideo.Objects {
+		obj := &runtimeConfig.MotionVideo.Objects[i]
+		// 在 lastPositions 中查找匹配的对象（通过 ID 或位置）
+		for _, lastObj := range lastPositions {
+			if obj.ID == lastObj.ID || (obj.Class == lastObj.Class && 
+				calculateIoU(obj.BBox, lastObj.BBox) > 0.3) {
+				// 更新方向和其他跟踪信息
+				obj.Direction = lastObj.Direction
+				obj.MaxConfidence = lastObj.MaxConfidence
+				obj.FrameCount = lastObj.FrameCount
+				obj.MovementVector = lastObj.MovementVector
+				Log("debug", fmt.Sprintf("Updated object [%s] direction to: %s", obj.ID, obj.Direction))
+				break
+			}
+		}
+	}
 
 	// 如果需要转换ts到mp4，则同步执行
 	if globalConfig.Video.RecodeTsToMp4 {

@@ -1,0 +1,94 @@
+{
+    "cameraName": "45102700411317000033",
+    "deviceUrl": "rtsp://10.168.1.102:554/rtp/45102700411117000030_45102700411317000033?originTypeStr=rtp_push",
+    "loStreamParamBypass": {
+       "width": 1920,
+        "height": 1080,
+        "fps": 25
+    },
+    "hiResDeviceUrl": "rtsp://10.168.1.102:554/rtp/45102700411117000030_45102700411317000033?originTypeStr=rtp_push",
+    "hiStreamParamBypass": {
+        "width": 1920,
+        "height": 1080,
+        "fps": 25
+    },
+    "printDebug": true,
+    "video": {
+        "hiResPath": "/media",
+        "recodeTsToMp4": true,
+        "onlyRemuxMp4": false,
+        "recordWithDetectionBox": false
+    },
+    "motion": {
+        "confidenceMinThreshold": 0.3,
+        "lookForClasses": ["car","truck"],
+        "onnxModel": "yolov8m",
+        "onnxEnableCoreMl": false,
+        "embeddedObjectScript": "objectDetectServerYolo.py",
+        "networkObjectDetectServer": "",
+        "prebufferSeconds": 3,
+        "eventGap": 10
+    },
+    "pixelMotionAreaThreshold": 50.00,
+    "objectCenterMovementThreshold": 50.0,
+    "objectAreaThreshold": 2000.0,
+    "ignoreAreasClasses": [
+    {
+        "class": [
+            "car",
+            "truck",
+            "bus",
+            "motorcycle"
+        ],
+        "coordinates": "530,1072,5,442"
+    },
+    {
+        "class": [
+            "car",
+            "truck",
+            "bus",
+            "motorcycle"
+        ],
+        "coordinates": "727,1073,470,1908"
+    },
+    {
+        "class": [
+            "car",
+            "truck",
+            "bus",
+            "motorcycle"
+        ],
+        "coordinates": "10,418,10,1908"
+    }
+],
+    "streamDrawIgnoredAreas": false,
+    "enableOutputStream": false,
+    "outputStreamAddr": ":8042",
+    "events": {
+        "webhookUrl": "",
+        "scriptPath": "",
+        "slack": {
+            "url": ""
+        },
+        "mqtt": {
+            "host": "",
+            "port": 1883,
+            "user": "",
+            "password": "",
+            "topic": ""
+        },
+        "postgreSQL": {
+            "host": "10.168.1.102",
+            "port": 5432,
+            "database": "smartdbase_prod_videogis",
+            "user": "postgres",
+            "password": "123456",
+            "sslMode": "disable"
+        }
+    },
+    "notifications": {
+        "enablePushoverAlerts": false,
+        "pushoverAppToken": "",
+        "pushoverUserKey": ""
+    }
+}

@@ -1,12 +1,12 @@
 {
-    "cameraName": "后门摄像头",
-    "deviceUrl": "rtsp://192.168.102.25:8554/hi",
+    "cameraName": "45102700411317000013",
+    "deviceUrl": "rtsp://10.168.1.102:554/rtp/45102700411117000010_45102700411317000013?originTypeStr=rtp_push",
     "loStreamParamBypass": {
        "width": 1920,
         "height": 1080,
         "fps": 25
     },
-    "hiResDeviceUrl": "rtsp://192.168.102.25:8554/hi",
+    "hiResDeviceUrl": "rtsp://10.168.1.102:554/rtp/45102700411117000010_45102700411317000013?originTypeStr=rtp_push",
     "hiStreamParamBypass": {
         "width": 1920,
         "height": 1080,
@@ -20,24 +20,29 @@
         "recordWithDetectionBox": false
     },
     "motion": {
-        "confidenceMinThreshold": 0.3,
-        "lookForClasses": ["car"],
+        "confidenceMinThreshold": 0.5,
+        "lookForClasses": ["truck"],
         "onnxModel": "yolov8m",
         "onnxEnableCoreMl": false,
         "embeddedObjectScript": "objectDetectServerYolo.py",
         "networkObjectDetectServer": "",
-        "prebufferSeconds": 3,
-        "eventGap": 10
+        "prebufferSeconds": 5,
+        "eventGap": 15
     },
-    "pixelMotionAreaThreshold": 50.00,
-    "objectCenterMovementThreshold": 50.0,
-    "objectAreaThreshold": 2000.0,
+    "pixelMotionAreaThreshold": 100.00,
+    "objectCenterMovementThreshold": 200.0,
+    "objectAreaThreshold": 10000.0,
     "ignoreAreasClasses": [
-        {"class": ["template"], "coordinates": "0,0,0,0"}
-    ],
+],
     "streamDrawIgnoredAreas": false,
-    "enableOutputStream": true,
+    "enableOutputStream": false,
     "outputStreamAddr": ":8042",
+    "directionDetection": {
+        "enabled": true,
+        "entryLine": "",
+        "exitLine": "",
+        "minMovementPixels": 50.0
+    },
     "events": {
         "webhookUrl": "",
         "scriptPath": "",
@@ -52,9 +57,9 @@
             "topic": ""
         },
         "postgreSQL": {
-            "host": "192.168.102.25",
+            "host": "10.168.1.102",
             "port": 5432,
-            "database": "postgres",
+            "database": "smartdbase_prod_videogis",
             "user": "postgres",
             "password": "123456",
             "sslMode": "disable"
